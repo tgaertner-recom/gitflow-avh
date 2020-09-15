@@ -361,7 +361,7 @@ showcommands!     Show git commands while executing them
 
 cmd_finish() {
 	OPTIONS_SPEC="\
-git flow hotfix finish [-h] [-F] [-s] [-u] [-m | -f ] [-p] [-k] [-n] [-b] [-S] <version>
+git flow hotfix finish [-h] [-F] [-s] [-u] [-m | -f ] [-p] [-k] [-n] [-b] [-S] [-P] [-t] <version>
 
 Finish hotfix branch <version>
 --
@@ -381,6 +381,8 @@ n,[no]notag           Don't tag this hotfix
 b,[no]nobackmerge     Don't back-merge master, or tag if applicable, in develop
 S,[no]squash          Squash hotfix during merge
 T,tagname!            Use given tag name
+P,[no]pull_request    Create pullrequest(s) from hotfix branch
+t,title!              Use the given title message in pull request
 "
 	local opts commit keepmsg remotebranchdeleted localbranchdeleted
 
@@ -400,6 +402,8 @@ T,tagname!            Use given tag name
 	DEFINE_boolean 'squash' false "squash release during merge" S
 	DEFINE_boolean 'squash-info' false "add branch info during squash"
 	DEFINE_string  'tagname' "" "use the given tag name" T
+	DEFINE_boolean 'pull_request' false "create pull request for feature" P
+	DEFINE_string  'title' "" "use the given title message" t
 
 	# Override defaults with values from config
 	gitflow_override_flag_boolean   "hotfix.finish.fetch"          "fetch"
@@ -416,6 +420,8 @@ T,tagname!            Use given tag name
 	gitflow_override_flag_string    "hotfix.finish.signingkey"     "signingkey"
 	gitflow_override_flag_string    "hotfix.finish.message"        "message"
 	gitflow_override_flag_string    "hotfix.finish.messagefile"    "messagefile"
+	gitflow_override_flag_boolean   "hotfix.finish.pull-request"  "pull_request"
+	gitflow_override_flag_string    "hotfix.finish.title"         "title"
 
 	# Parse arguments
 	parse_args "$@"
@@ -458,8 +464,8 @@ T,tagname!            Use given tag name
 	# merged into the local branch
 	if git_remote_branch_exists "$ORIGIN/$BRANCH"; then
 		git_fetch_branch "$ORIGIN" "$BRANCH"
-	fi
 
+	fi
 	# Update local branches with remote branches
 	if flag fetch; then
 		git_fetch_branch "$ORIGIN" "$BASE_BRANCH"
@@ -513,17 +519,22 @@ T,tagname!            Use given tag name
 
 	run_pre_hook "$VERSION_PREFIX$TAGNAME" "$ORIGIN" "$BRANCH"
 
-	# Try to merge into BASE.
-	# In case a previous attempt to finish this release branch has failed,
-	# but the merge into BASE was successful, we skip it now
-	if ! git_is_branch_merged_into "$BRANCH" "$BASE_BRANCH"; then
-		git_do checkout "$BASE_BRANCH" || die "Could not check out branch '$BASE_BRANCH'."
-		if noflag squash; then
-			git_do merge --no-ff "$BRANCH" || die "There were merge conflicts." # TODO: What do we do now?
-		else
-			git_do merge --squash "$BRANCH" || die "There were merge conflicts." # TODO: What do we do now?
-			flag squash_info && gitflow_create_squash_message "Merged hotfix branch '$BRANCH'" "$BASE_BRANCH" "$BRANCH" > "$DOT_GIT_DIR/SQUASH_MSG"
-			git_do commit
+	if flag pull_request; then
+		git_do flow hotfix publish
+		gitflow_create_pull_request "$BASE_BRANCH" "$BRANCH" "$FLAGS_title"
+	else
+		# Try to merge into BASE.
+		# In case a previous attempt to finish this release branch has failed,
+		# but the merge into BASE was successful, we skip it now
+		if ! git_is_branch_merged_into "$BRANCH" "$BASE_BRANCH"; then
+			git_do checkout "$BASE_BRANCH" || die "Could not check out branch '$BASE_BRANCH'."
+			if noflag squash; then
+				git_do merge --no-ff "$BRANCH" || die "There were merge conflicts." # TODO: What do we do now?
+			else
+				git_do merge --squash "$BRANCH" || die "There were merge conflicts." # TODO: What do we do now?
+				flag squash_info && gitflow_create_squash_message "Merged hotfix branch '$BRANCH'" "$BASE_BRANCH" "$BRANCH" > "$DOT_GIT_DIR/SQUASH_MSG"
+				git_do commit
+			fi
 		fi
 	fi
 
@@ -557,26 +568,31 @@ T,tagname!            Use given tag name
 			MERGE_BRANCH="$BRANCH"
 		fi
 
-		# Try to merge into develop.
-		# In case a previous attempt to finish this release branch has failed,
-		# but the merge into develop was successful, we skip it now
-		if ! git_is_branch_merged_into "$MERGE_BRANCH" "$DEVELOP_BRANCH"; then
-			git_do checkout "$DEVELOP_BRANCH" || die "Could not check out branch '$DEVELOP_BRANCH'."
+		if flag pull_request; then
+			gitflow_create_pull_request "$DEVELOP_BRANCH" "$BRANCH" "$FLAGS_title"
+			git_do checkout "$DEVELOP_BRANCH"
+		else
+			# Try to merge into develop.
+			# In case a previous attempt to finish this release branch has failed,
+			# but the merge into develop was successful, we skip it now
+			if ! git_is_branch_merged_into "$MERGE_BRANCH" "$DEVELOP_BRANCH"; then
+				git_do checkout "$DEVELOP_BRANCH" || die "Could not check out branch '$DEVELOP_BRANCH'."
 
-			if noflag nobackmerge; then
-				# Accounting for 'git describe', if a release is tagged
-				# we use the tag commit instead of the branch.
-				if noflag notag; then
-					commit="$VERSION_PREFIX$TAGNAME"
+				if noflag nobackmerge; then
+					# Accounting for 'git describe', if a release is tagged
+					# we use the tag commit instead of the branch.
+					if noflag notag; then
+						commit="$VERSION_PREFIX$TAGNAME"
+					else
+						commit="$BASE_BRANCH"
+					fi
 				else
-					commit="$BASE_BRANCH"
+					commit="$BRANCH"
 				fi
-			else
-				commit="$BRANCH"
-			fi
 
-			git_do merge --no-ff "$commit" || die "There were merge conflicts."
-			# TODO: What do we do now?
+				git_do merge --no-ff "$commit" || die "There were merge conflicts."
+				# TODO: What do we do now?
+			fi
 		fi
 	fi
 
